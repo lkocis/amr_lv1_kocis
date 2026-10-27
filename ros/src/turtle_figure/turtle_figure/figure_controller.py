@@ -5,77 +5,70 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from turtlesim.msg import Pose
 
-CENTER = 5.544
-AMPLITUDE = 4.0
-TWO_PI = 2.0 * math.pi
 
-
-def curve(w: float):
-    #x = 5.544 + 4 sin(w), y = 5.544 + 4 sin(w) cos(w), w in [0, 2pi].
-    return (CENTER + AMPLITUDE * math.sin(w),
-            CENTER + AMPLITUDE * math.sin(w) * math.cos(w))
-
-
-def wrap_angle(a: float) -> float:
-    return math.atan2(math.sin(a), math.cos(a))
-
-
-class FigureController(Node):
-
+class FigureNode(Node):
     def __init__(self):
-        super().__init__('figure_controller')
-        self.lookahead = self.declare_parameter('lookahead', 0.6).value
-        self.linear_speed = self.declare_parameter('linear_speed', 2.0).value
-        self.k_rotate = self.declare_parameter('k_rotate', 4.0).value
-        self.dw = self.declare_parameter('dw', 0.01).value  # korak parametra
+        super().__init__('figure_node')
 
-        self.w = 0.0
+        self.pub = self.create_publisher(Twist, '/turtle1/cmd_vel', 10)
+        self.sub = self.create_subscription(Pose, '/turtle1/pose', self.pose_callback, 10)
+        self.timer = self.create_timer(0.02, self.control_loop)
+
         self.pose = None
+        self.omega = 0.0          # trenutni parametar krivulje, [0, 2*pi]
+        self.omega_step = 0.1     # za koliko se pomice ciljna tocka
+        self.reach_dist = 0.4     # udaljenost na kojoj se cilj smatra dostignutim
+        self.linear_speed = 2.0   # brzina voznje naprijed
 
-        #Čvor objavljuje brzine na cmd_vel, a turtlesim ih čita
-        self.cmd_pub = self.create_publisher(Twist, '/turtle1/cmd_vel', 10)
-        self.create_subscription(Pose, '/turtle1/pose', self.pose_cb, 10)
-        self.create_timer(0.02, self.control_loop)  # 50 Hz
-
-    def pose_cb(self, msg: Pose):
+    def pose_callback(self, msg):
         self.pose = msg
 
+    def target(self):
+        # za trenutni omega vrati x i y koordinate ciljne tocke na krivulji
+        x = 5.544 + 4 * math.sin(self.omega)
+        y = 5.544 + 4 * math.sin(self.omega) * math.cos(self.omega)
+        return x, y
+
     def control_loop(self):
-        #Ako nije stigla prva poza, ne šalji ništa
         if self.pose is None:
             return
-        p = self.pose
 
-        # pomakni cilj naprijed po krivulji dok nije dovoljno daleko 
-        #(Čvor pamti parametar self.w, a to je pozicija ciljne točke na krivulji. 
-        #Dok je ta točka bliže od 0.6 kornjači, w se povećava u malim koracima.)
-        for _ in range(2000):
-            tx, ty = curve(self.w)
-            if math.hypot(tx - p.x, ty - p.y) >= self.lookahead:
-                break
-            self.w = (self.w + self.dw) % TWO_PI #da kretanje bude beskonačno
+        tx, ty = self.target()
+        dx = tx - self.pose.x           # dx i dy su razlike po osima
+        dy = ty - self.pose.y
+        distance = math.hypot(dx, dy)   # hypot iz dx i dy daje udaljenost (Pitagora)
 
-        err = wrap_angle(math.atan2(ty - p.y, tx - p.x) - p.theta)
-        cmd = Twist()
-        if abs(err) > math.pi / 2:
-            cmd.angular.z = self.k_rotate * err  # okreni se na mjestu
+        # Ako je blize od 0.4, pomakni cilj naprijed (za 0.1). 
+        # Kad omega prijeđe 2π, vrati ga prema nuli, osmica se crta beskonacno.
+        if distance < self.reach_dist:
+            self.omega += self.omega_step
+            if self.omega > 2 * math.pi:
+                self.omega -= 2 * math.pi   
+            return
+
+        angle_to_target = math.atan2(dy, dx)                  # kut prema ciljnoj tocki
+        error = angle_to_target - self.pose.theta             # theta je trenutni kut, error je koliko se treba okrenuti.
+        error = math.atan2(math.sin(error), math.cos(error))  # normalizacija na [-pi, pi]
+
+        msg = Twist()
+        msg.angular.z = 6.0 * error
+        # Ako je greska manja od 1 rad, vozi punom brzinom 2.0. Ako je velika, uspori na 0.5 
+        if abs(error) < 1.0:
+            msg.linear.x = self.linear_speed
         else:
-            cmd.linear.x = self.linear_speed
-            cmd.angular.z = 2.0 * self.linear_speed * math.sin(err) / self.lookahead
-        self.cmd_pub.publish(cmd)
+            msg.linear.x = 0.5
+        self.pub.publish(msg)
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = FigureController()
+    node = FigureNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-    finally:
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+    node.destroy_node()
+    rclpy.shutdown()
 
 
 if __name__ == '__main__':
