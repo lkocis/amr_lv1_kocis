@@ -1,0 +1,11 @@
+# Windows
+*:Zone.Identifier
+
+# ROS / colcon (ako si ikad buildala izvan Dockera)
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc

@@ -1,0 +1,28 @@
+# Prije pokretanja na hostu: xhost +local:docker
+services:
+  turtle-ros:
+    build: ./ros
+    image: lv1-turtle-ros
+    network_mode: host
+    ipc: host
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+    restart: unless-stopped
+
+  pose-viewer:
+    build: ./viewer
+    image: lv1-pose-viewer
+    network_mode: host
+    ipc: host
+    depends_on:
+      - turtle-ros
+    environment:
+      - DISPLAY=${DISPLAY}
+      - ROSBRIDGE_HOST=localhost
+      - ROSBRIDGE_PORT=9090
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+    restart: on-failure
